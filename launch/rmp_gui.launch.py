@@ -8,10 +8,15 @@ from launch.substitutions import PathJoinSubstitution
 
 def generate_launch_description():
     
-    # ==========================================================
+    # 获取配置文件路径
+    # 假设你的配置文件放在 rmp_gui 包下的 config 目录里
+    config_path = PathJoinSubstitution([
+        FindPackageShare('rmp_gui'),
+        'config',
+        'robot_params.yaml'
+    ])
+
     # 1. 定义转发节点 (Relay)
-    # 解决：SLAM 想要 /scan，但机器人只有 /lidar_1/scan_filtered
-    # ==========================================================
     relay_node = Node(
         package='topic_tools',
         executable='relay',
@@ -21,10 +26,7 @@ def generate_launch_description():
         parameters=[{'use_sim_time': True}]
     )
 
-    # ==========================================================
     # 2. 定义 SLAM Toolbox
-    # 既然机器人没启动它，我们就自己启动！
-    # ==========================================================
     slam_toolbox_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
@@ -36,26 +38,25 @@ def generate_launch_description():
         launch_arguments={'use_sim_time': 'True'}.items()
     )
 
-    # ==========================================================
-    # 3. 定义你的 GUI 节点
-    # ==========================================================
+    # 3. 定义你的 GUI 节点 (已修改)
     gui_node = Node(
         package='rmp_gui',
         executable='start_gui',
+        name='teleop_gui', # 必须与 YAML 文件中的节点名对应
         output='screen',
-        emulate_tty=True, # 允许直接打印 Log
+        emulate_tty=True,
         parameters=[
-            {'use_sim_time': True} # 确保时间同步
+            config_path,       # 加载外部 YAML 参数文件
+            {'use_sim_time': True} 
         ],
         remappings=[
             ('/map', '/map'),
-            # 如果你的 GUI 想要直接显示雷达点云，也可以加上这个：
             ('/scan', '/lidar_1/scan_filtered') 
         ]
     )
 
     return LaunchDescription([
-        relay_node,          # 先搭桥
-        slam_toolbox_launch, # 再启动算法
-        gui_node             # 最后启动界面
+        relay_node,
+        slam_toolbox_launch,
+        gui_node
     ])

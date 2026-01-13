@@ -1,0 +1,14 @@
+teleop_gui:
+  ros__parameters:
+    # 底盘移动步长
+    base_movement:
+      linear_step: 0.75
+      angular_step: 0.5
+    # 机械臂 6 个关节的独立步长
+    arm_joint_steps:
+      shoulder_pan: 0.55
+      shoulder_lift: 0.15
+      elbow: 0.15
+      wrist_1: 0.10
+      wrist_2: 0.10
+      wrist_3: 0.10

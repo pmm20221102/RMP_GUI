@@ -40,14 +40,14 @@ class NavRosWorker(QThread):
     # Signal to update UI with new map
     map_received = pyqtSignal(OccupancyGrid)
 
-    def __init__(self):
+    def __init__(self,node):
         super().__init__()
-        self.node = None
+        self.node = node
         self.nav_client = None
         self.executor = None  # Independent executor
 
     def run(self):
-        self.node = Node('gui_nav_backend')
+        # self.node = Node('gui_nav_backend')
         
         # [Critical Fix] Create independent executor and bind node
         # This prevents conflict with the main thread (fixes "wait set index too big")
@@ -76,7 +76,7 @@ class NavRosWorker(QThread):
             self.node.get_logger().error(f"Nav Executor spin failed: {e}")
         finally:
             self.executor.shutdown()
-            self.node.destroy_node()
+            # self.node.destroy_node()
 
     def map_callback(self, msg):
         self.node.get_logger().info(f"🎉 RECEIVED MAP DATA! Size: {msg.info.width}x{msg.info.height}")
@@ -114,9 +114,9 @@ class NavRosWorker(QThread):
 # 🦾 [Backend] Arm Worker
 # ===========================================================
 class ArmRosWorker(QThread):
-    def __init__(self):
+    def __init__(self,node):
         super().__init__()
-        self.node = None
+        self.node = node
         self.action_client = None
         self.executor = None # Independent executor
         self.current_joints = {}
@@ -126,7 +126,7 @@ class ArmRosWorker(QThread):
         ]
 
     def run(self):
-        self.node = Node('arm_control_backend')
+        # self.node = Node('arm_control_backend')
         
         # [Critical Fix] Independent executor
         self.executor = SingleThreadedExecutor()
@@ -149,7 +149,7 @@ class ArmRosWorker(QThread):
             pass
         finally:
             self.executor.shutdown()
-            self.node.destroy_node()
+            # self.node.destroy_node()
 
     def sub_callback(self, msg):
         for name, pos in zip(msg.name, msg.position):
@@ -192,43 +192,65 @@ class ArmRosWorker(QThread):
 # 🦾 [Frontend] Arm Control Window
 # ===========================================================
 class ArmControlWindow(QWidget, Ui_Form):
-    def __init__(self):
+    def __init__(self, node): # 传入主 GUI 的 node 引用
         super().__init__()
         self.setupUi(self)
+        self.node = node # 保存引用
         self.setWindowTitle("Robot Arm Debug")
         self.resize(600, 400)
 
-        # Start worker thread
-        self.worker = ArmRosWorker()
+        # 内部辅助函数：安全地获取参数，如果没声明则先声明
+        def get_safe_param(name, default_val):
+            if not self.node.has_parameter(name):
+                self.node.declare_parameter(name, default_val)
+            return self.node.get_parameter(name).value
+
+        # 1. 声明并从参数服务器（YAML）获取 6 个关节的步长
+        step_pan   = get_safe_param('arm_joint_steps.shoulder_pan', 0.15)
+        step_lift  = get_safe_param('arm_joint_steps.shoulder_lift', 0.15)
+        step_elbow = get_safe_param('arm_joint_steps.elbow', 0.15)
+        step_w1    = get_safe_param('arm_joint_steps.wrist_1', 0.10)
+        step_w2    = get_safe_param('arm_joint_steps.wrist_2', 0.10)
+        step_w3    = get_safe_param('arm_joint_steps.wrist_3', 0.10)
+
+        self.worker = ArmRosWorker(self.node)
         self.worker.start()
 
-        # Connect Buttons
-        self.btn_pan_left.clicked.connect(lambda: self.worker.send_cmd("ur_shoulder_pan_joint", 0.15))
-        self.btn_pan_right.clicked.connect(lambda: self.worker.send_cmd("ur_shoulder_pan_joint", -0.15))
-        self.btn_lift_up.clicked.connect(lambda: self.worker.send_cmd("ur_shoulder_lift_joint", -0.15))
-        self.btn_lift_down.clicked.connect(lambda: self.worker.send_cmd("ur_shoulder_lift_joint", 0.15))
-        self.btn_elbow_ext.clicked.connect(lambda: self.worker.send_cmd("ur_elbow_joint", -0.15))
-        self.btn_elbow_ret.clicked.connect(lambda: self.worker.send_cmd("ur_elbow_joint", 0.15))
-        self.btn_wrist1_pos.clicked.connect(lambda: self.worker.send_cmd("ur_wrist_1_joint", 0.15))
-        self.btn_wrist1_neg.clicked.connect(lambda: self.worker.send_cmd("ur_wrist_1_joint", -0.15))
-        self.btn_wrist2_pos.clicked.connect(lambda: self.worker.send_cmd("ur_wrist_2_joint", 0.15))
-        self.btn_wrist2_neg.clicked.connect(lambda: self.worker.send_cmd("ur_wrist_2_joint", -0.15))
-        self.btn_wrist3_pos.clicked.connect(lambda: self.worker.send_cmd("ur_wrist_3_joint", 0.15))
-        self.btn_wrist3_neg.clicked.connect(lambda: self.worker.send_cmd("ur_wrist_3_joint", -0.15))
+        # 2. 将按钮点击事件绑定到对应的关节和步长上
+        # Shoulder Pan
+        self.btn_pan_left.clicked.connect(lambda: self.worker.send_cmd("ur_shoulder_pan_joint", step_pan))
+        self.btn_pan_right.clicked.connect(lambda: self.worker.send_cmd("ur_shoulder_pan_joint", -step_pan))
+        
+        # Shoulder Lift
+        self.btn_lift_up.clicked.connect(lambda: self.worker.send_cmd("ur_shoulder_lift_joint", -step_lift))
+        self.btn_lift_down.clicked.connect(lambda: self.worker.send_cmd("ur_shoulder_lift_joint", step_lift))
+        
+        # Elbow
+        self.btn_elbow_ext.clicked.connect(lambda: self.worker.send_cmd("ur_elbow_joint", -step_elbow))
+        self.btn_elbow_ret.clicked.connect(lambda: self.worker.send_cmd("ur_elbow_joint", step_elbow))
+        
+        # Wrist 1
+        self.btn_wrist1_pos.clicked.connect(lambda: self.worker.send_cmd("ur_wrist_1_joint", step_w1))
+        self.btn_wrist1_neg.clicked.connect(lambda: self.worker.send_cmd("ur_wrist_1_joint", -step_w1))
 
-    def closeEvent(self, event):
-        event.accept()
+        # Wrist 2
+        self.btn_wrist2_pos.clicked.connect(lambda: self.worker.send_cmd("ur_wrist_2_joint", step_w2))
+        self.btn_wrist2_neg.clicked.connect(lambda: self.worker.send_cmd("ur_wrist_2_joint", -step_w2))
 
+        # Wrist 3
+        self.btn_wrist3_pos.clicked.connect(lambda: self.worker.send_cmd("ur_wrist_3_joint", step_w3))
+        self.btn_wrist3_neg.clicked.connect(lambda: self.worker.send_cmd("ur_wrist_3_joint", -step_w3))
 
 # ===========================================================
 # 📸 [Frontend] Camera Monitor Window
 # ===========================================================
 class CameraWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self,node):
         super().__init__()
         self.ui = Ui_CameraWindow()
         self.ui.setupUi(self)
         self.setWindowTitle("Camera Monitor")
+        self.node = node
         self._frame = None
         self.setMinimumSize(640, 480)
         self.setMaximumSize(1280, 720)
@@ -256,7 +278,10 @@ class TeleopGUI(Node, QMainWindow):
     def __init__(self):
         Node.__init__(self, "teleop_gui")
         QMainWindow.__init__(self)
-
+        self.declare_parameter('base_movement.linear_step', 0.5)
+        self.declare_parameter('base_movement.angular_step', 0.5)
+        self.l_step = self.get_parameter('base_movement.linear_step').value
+        self.a_step = self.get_parameter('base_movement.angular_step').value
         # ------------------------------------------------------------------
         # 1. ROS2 Initialization
         # ------------------------------------------------------------------
@@ -283,7 +308,7 @@ class TeleopGUI(Node, QMainWindow):
         # ------------------------------------------------------------------
         
         # Camera Menu
-        self.camera_window = CameraWindow()
+        self.camera_window = CameraWindow(self)
         if hasattr(self.ui, "actionCamera"):
             self.ui.actionCamera.triggered.connect(self.show_camera_window)
 
@@ -308,7 +333,7 @@ class TeleopGUI(Node, QMainWindow):
         # 5. Start Background Workers
         # ------------------------------------------------------------------
         # Navigation Worker
-        self.nav_thread = NavRosWorker()
+        self.nav_thread = NavRosWorker(self)
         self.nav_thread.map_received.connect(self.update_map_display)
         self.nav_thread.start()
         
@@ -408,7 +433,8 @@ class TeleopGUI(Node, QMainWindow):
     # --- Popups ---
     def show_arm_window(self):
         if self.arm_window is None:
-            self.arm_window = ArmControlWindow()
+            # 关键：将 self 传递给机械臂窗口，使其能访问参数服务器
+            self.arm_window = ArmControlWindow(self) 
         self.arm_window.show()
         self.arm_window.raise_()
         self.arm_window.activateWindow()
@@ -426,15 +452,15 @@ class TeleopGUI(Node, QMainWindow):
         self.camera_window.activateWindow()
 
     # --- Teleop Logic ---
-    def forward(self): self._pub_vel(0.5, 0.0)
-    def backward(self): self._pub_vel(-0.5, 0.0)
-    def turn_left(self): self._pub_vel(0.0, 0.5)
-    def turn_right(self): self._pub_vel(0.0, -0.5)
+    def forward(self): self._pub_vel(self.l_step, 0.0)
+    def backward(self): self._pub_vel(-self.l_step, 0.0)
+    def turn_left(self): self._pub_vel(0.0, self.a_step)
+    def turn_right(self): self._pub_vel(0.0, -self.a_step)
     def stop(self): self._pub_vel(0.0, 0.0)
-    def forward_left(self): self._pub_vel(0.5, 0.5)
-    def forward_right(self): self._pub_vel(0.5, -0.5)
-    def backward_left(self): self._pub_vel(-0.5, -0.5)
-    def backward_right(self): self._pub_vel(-0.5, 0.5)
+    def forward_left(self): self._pub_vel(self.l_step, self.a_step)
+    def forward_right(self): self._pub_vel(self.l_step, -self.a_step)
+    def backward_left(self): self._pub_vel(-self.l_step, -self.a_step)
+    def backward_right(self): self._pub_vel(-self.l_step, self.a_step)
 
     def _pub_vel(self, x, z):
         msg = Twist()
